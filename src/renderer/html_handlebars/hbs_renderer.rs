@@ -29,6 +29,7 @@ impl HtmlHandlebars {
         item: &BookItem,
         mut ctx: RenderItemContext<'_>,
         print_content: &mut String,
+        boring_line_regex: &Regex,
     ) -> Result<()> {
         // FIXME: This should be made DRY-er and rely less on mutable state
 
@@ -107,7 +108,12 @@ impl HtmlHandlebars {
         debug!("Render template");
         let rendered = ctx.handlebars.render("index", &ctx.data)?;
 
-        let rendered = self.post_process(rendered, &ctx.html_config.playground, ctx.edition);
+        let rendered = self.post_process(
+            rendered,
+            &ctx.html_config.playground,
+            ctx.edition,
+            boring_line_regex,
+        );
 
         // Write to file
         debug!("Creating {}", filepath.display());
@@ -118,8 +124,12 @@ impl HtmlHandlebars {
             ctx.data.insert("path_to_root".to_owned(), json!(""));
             ctx.data.insert("is_index".to_owned(), json!("true"));
             let rendered_index = ctx.handlebars.render("index", &ctx.data)?;
-            let rendered_index =
-                self.post_process(rendered_index, &ctx.html_config.playground, ctx.edition);
+            let rendered_index = self.post_process(
+                rendered_index,
+                &ctx.html_config.playground,
+                ctx.edition,
+                boring_line_regex,
+            );
             debug!("Creating index.html from {}", ctx_path);
             utils::fs::write_file(&ctx.destination, "index.html", rendered_index.as_bytes())?;
         }
@@ -134,6 +144,7 @@ impl HtmlHandlebars {
         src_dir: &Path,
         handlebars: &mut Handlebars<'_>,
         data: &mut serde_json::Map<String, serde_json::Value>,
+        boring_line_regex: &Regex,
     ) -> Result<()> {
         let destination = &ctx.destination;
         let content_404 = if let Some(ref filename) = html_config.input_404 {
@@ -172,8 +183,12 @@ impl HtmlHandlebars {
         data_404.insert("content".to_owned(), json!(html_content_404));
         let rendered = handlebars.render("index", &data_404)?;
 
-        let rendered =
-            self.post_process(rendered, &html_config.playground, ctx.config.rust.edition);
+        let rendered = self.post_process(
+            rendered,
+            &html_config.playground,
+            ctx.config.rust.edition,
+            boring_line_regex,
+        );
         let output_file = get_404_output_file(&html_config.input_404);
         utils::fs::write_file(destination, output_file, rendered.as_bytes())?;
         debug!("Creating 404.html ✓");
@@ -186,10 +201,11 @@ impl HtmlHandlebars {
         rendered: String,
         playground_config: &Playground,
         edition: Option<RustEdition>,
+        boring_line_regex: &Regex,
     ) -> String {
         let rendered = build_header_links(&rendered);
         let rendered = fix_code_blocks(&rendered);
-        let rendered = add_playground_pre(&rendered, playground_config, edition);
+        let rendered = add_playground_pre(&rendered, playground_config, edition, boring_line_regex);
 
         rendered
     }
@@ -452,6 +468,11 @@ fn maybe_wrong_theme_dir(dir: &Path) -> Result<bool> {
     }
 }
 
+fn mk_boring_lines_regex(hide_line_char: &str) -> Regex {
+    let regex: String = format!("^(\\s*){}(.?)(.*)$", hide_line_char);
+    return Regex::new(regex.as_str()).unwrap();
+}
+
 impl Renderer for HtmlHandlebars {
     fn name(&self) -> &str {
         "html"
@@ -464,6 +485,9 @@ impl Renderer for HtmlHandlebars {
         let destination = &ctx.destination;
         let book = &ctx.book;
         let build_dir = ctx.root.join(&ctx.config.build.build_dir);
+
+        let boring_line_regex: Regex =
+            mk_boring_lines_regex(html_config.playground.hide_line_char.as_str());
 
         if destination.exists() {
             utils::fs::remove_dir_content(destination)
@@ -526,13 +550,20 @@ impl Renderer for HtmlHandlebars {
                 edition: ctx.config.rust.edition,
                 chapter_titles: &ctx.chapter_titles,
             };
-            self.render_item(item, ctx, &mut print_content)?;
+            self.render_item(item, ctx, &mut print_content, &boring_line_regex)?;
             is_index = false;
         }
 
         // Render 404 page
         if html_config.input_404 != Some("".to_string()) {
-            self.render_404(ctx, &html_config, &src_dir, &mut handlebars, &mut data)?;
+            self.render_404(
+                ctx,
+                &html_config,
+                &src_dir,
+                &mut handlebars,
+                &mut data,
+                &boring_line_regex,
+            )?;
         }
 
         // Print version
@@ -546,8 +577,12 @@ impl Renderer for HtmlHandlebars {
             debug!("Render template");
             let rendered = handlebars.render("index", &data)?;
 
-            let rendered =
-                self.post_process(rendered, &html_config.playground, ctx.config.rust.edition);
+            let rendered = self.post_process(
+                rendered,
+                &html_config.playground,
+                ctx.config.rust.edition,
+                &boring_line_regex,
+            );
 
             utils::fs::write_file(destination, "print.html", rendered.as_bytes())?;
             debug!("Creating print.html ✓");
@@ -817,6 +852,7 @@ fn add_playground_pre(
     html: &str,
     playground_config: &Playground,
     edition: Option<RustEdition>,
+    boring_line_regex: &Regex,
 ) -> String {
     let regex = Regex::new(r##"((?s)<code[^>]?class="([^"]+)".*?>(.*?)</code>)"##).unwrap();
     regex
@@ -828,11 +864,19 @@ fn add_playground_pre(
 
             if classes.contains(lang_class.as_str()) {
                 if playground_config.language == "rust" {
-                    add_playground_pre_rust(playground_config, edition, classes, text, code)
+                    add_playground_pre_rust(
+                        playground_config,
+                        edition,
+                        classes,
+                        text,
+                        code,
+                        boring_line_regex,
+                    )
                 } else {
                     format!(
                         "<pre class=\"playground\"><code class=\"{}\">{}</code></pre>",
-                        classes, code
+                        classes,
+                        hide_lines(code, boring_line_regex)
                     )
                 }
             } else {
@@ -850,6 +894,7 @@ fn add_playground_pre_rust(
     classes: &str,
     text: &str,
     code: &str,
+    boring_line_regex: &Regex,
 ) -> String {
     if (!classes.contains("ignore")
         && !classes.contains("noplayground")
@@ -889,22 +934,22 @@ fn add_playground_pre_rust(
 
                     format!("\n# #![allow(unused)]\n{}#fn main() {{\n{}#}}", attrs, code).into()
                 };
-                hide_lines(&content)
+                hide_lines(&content, boring_line_regex)
             }
         )
     } else {
-        format!("<code class=\"{}\">{}</code>", classes, hide_lines(code))
+        format!(
+            "<code class=\"{}\">{}</code>",
+            classes,
+            hide_lines(code, boring_line_regex)
+        )
     }
 }
 
-lazy_static! {
-    static ref BORING_LINES_REGEX: Regex = Regex::new(r"^(\s*)#(.?)(.*)$").unwrap();
-}
-
-fn hide_lines(content: &str) -> String {
+fn hide_lines(content: &str, boring_line_regex: &Regex) -> String {
     let mut result = String::with_capacity(content.len());
     for line in content.lines() {
-        if let Some(caps) = BORING_LINES_REGEX.captures(line) {
+        if let Some(caps) = boring_line_regex.captures(line) {
             if &caps[2] == "#" {
                 result += &caps[1];
                 result += &caps[2];
@@ -959,6 +1004,10 @@ struct RenderItemContext<'a> {
     html_config: HtmlConfig,
     edition: Option<RustEdition>,
     chapter_titles: &'a HashMap<PathBuf, String>,
+}
+
+lazy_static! {
+    static ref BORING_LINES_REGEX: Regex = mk_boring_lines_regex("#");
 }
 
 #[cfg(test)]
@@ -1026,6 +1075,7 @@ mod tests {
                     ..Playground::default()
                 },
                 None,
+                &BORING_LINES_REGEX,
             );
             assert_eq!(&*got, *should_be);
         }
@@ -1050,6 +1100,7 @@ mod tests {
                     ..Playground::default()
                 },
                 Some(RustEdition::E2015),
+                &BORING_LINES_REGEX,
             );
             assert_eq!(&*got, *should_be);
         }
@@ -1074,6 +1125,7 @@ mod tests {
                     ..Playground::default()
                 },
                 Some(RustEdition::E2018),
+                &BORING_LINES_REGEX,
             );
             assert_eq!(&*got, *should_be);
         }
@@ -1098,6 +1150,7 @@ mod tests {
                     ..Playground::default()
                 },
                 Some(RustEdition::E2021),
+                &BORING_LINES_REGEX,
             );
             assert_eq!(&*got, *should_be);
         }

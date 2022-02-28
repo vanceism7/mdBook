@@ -633,6 +633,8 @@ pub struct Playground {
     /// Set's the language the playground will work with
     /// TODO: Use an array when there's support for multiple languages simultaneously
     pub language: String,
+    /// Choose which character will hide lines
+    pub hide_line_char: String,
 }
 
 impl Default for Playground {
@@ -643,6 +645,7 @@ impl Default for Playground {
             copy_js: true,
             line_numbers: false,
             language: "rust".to_string(),
+            hide_line_char: "#".to_string(),
         }
     }
 }
@@ -752,7 +755,8 @@ mod tests {
         [output.html.playground]
         editable = true
         editor = "ace"
-        language = "rust"
+        language = "blub"
+        hide-line-char = "??"
 
         [output.html.redirect]
         "index.html" = "overview.html"
@@ -786,7 +790,8 @@ mod tests {
             copyable: true,
             copy_js: true,
             line_numbers: false,
-            language: "rust".to_string(),
+            language: "blub".to_string(),
+            hide_line_char: "??".to_string(),
         };
         let html_should_be = HtmlConfig {
             curly_quotes: true,
