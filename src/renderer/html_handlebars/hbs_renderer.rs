@@ -469,7 +469,7 @@ fn maybe_wrong_theme_dir(dir: &Path) -> Result<bool> {
 }
 
 fn mk_boring_lines_regex(hide_line_char: &str) -> Regex {
-    let regex: String = format!("^(\\s*){}(.?)(.*)$", hide_line_char);
+    let regex: String = format!("^(\\s*){}(.?)(.*)$", regex::escape(hide_line_char));
     return Regex::new(regex.as_str()).unwrap();
 }
 
